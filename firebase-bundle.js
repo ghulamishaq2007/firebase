@@ -3635,12 +3635,22 @@ var createWebChannelTransport;
     Gc(this);
   };
   h.send = function(a) {
-    if (this.readyState != 1) throw this.abort(), Error("need to call open() first. ");
-    if (this.v.signal.aborted) throw this.abort(), Error("Request was aborted.");
+    if (this.readyState != 1) {
+      try { this.abort(); } catch (e) {}
+      return;
+    }
+    if (this.v.signal.aborted) {
+      try { this.abort(); } catch (e) {}
+      return;
+    }
     this.g = true;
     const b2 = { headers: this.A, method: this.F, credentials: this.m, cache: void 0, signal: this.v.signal };
     a && (b2.body = a);
-    (this.H || l2).fetch(new Request(this.D, b2)).then(this.Pa.bind(this), this.ga.bind(this));
+    try {
+      (this.H || l2).fetch(new Request(this.D, b2)).then(this.Pa.bind(this), this.ga.bind(this)).catch(this.ga.bind(this));
+    } catch (err) {
+      this.ga();
+    }
   };
   h.abort = function() {
     this.response = this.responseText = "";
