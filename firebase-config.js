@@ -216,7 +216,9 @@ export const PRODUCT_ID_ALIASES = {
   "black-Gents Suits": "black-wash-wear-men-suit-fabric-for-all-season",
   "black-wash-&-wear-men-suit-fabric-for-all-season": "black-wash-wear-men-suit-fabric-for-all-season",
   "tan-leather-Gents Suits": "men-khaddar-plain-blue-suit-summer",
-  "urban-sneakers": "girl-leather-textured-hand-bag"
+  "urban-sneakers": "girl-leather-textured-hand-bag",
+  "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women": "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women"
+
 };
 
 export function canonicalizeProductId(id) {
