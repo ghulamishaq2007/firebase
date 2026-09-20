@@ -30,7 +30,9 @@ const PRODUCT_URLS = {
   "tan-leather-shoes": "tan-leather-shoes.html",
   "orange-cross-strap-rexine-slides-for-women": "orange-cross-strap-rexine-slides-for-women.html",
   "women-white-rexine-fancy-slippers": "women-white-rexine-fancy-slippers.html",
-  "gents-peshawari-chappal": "gents-peshawari-chappal.html"
+  "gents-peshawari-chappal": "gents-peshawari-chappal.html",
+"royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women": "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women.html"
+
 
 };
 
