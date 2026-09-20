@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Stock & Order Control Center | ZENVORA SHOOP</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <style>
+    .admin-dashboard-layout {
+      max-width: 1200px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    .admin-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 2px solid #E5E7EB;
+    }
+    .admin-tabs {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .admin-tab-btn {
+      padding: 0.65rem 1.25rem;
+      border: 1px solid #D1D5DB;
+      background: #ffffff;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      color: #4B5563;
+      transition: var(--transition);
+    }
+    .admin-tab-btn.active {
+      background: var(--primary);
+      color: #ffffff;
+      border-color: var(--primary);
+    }
+    .admin-card {
+      background: #ffffff;
+      border: 1px solid #E5E7EB;
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.04);
+      margin-bottom: 2rem;
+    }
+    .stock-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    .stock-table th, .stock-table td {
+      padding: 0.85rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #F3F4F6;
+      font-size: 0.9rem;
+    }
+    .stock-table th {
+      background: #F9FAFB;
+      font-weight: 700;
+      color: #374151;
+      text-transform: uppercase;
+      font-size: 0.75rem;
+      letter-spacing: 0.05em;
+    }
+    .stock-input-field {
+      width: 80px;
+      padding: 0.4rem 0.5rem;
+      border: 1.5px solid #D1D5DB;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      text-align: center;
+      font-weight: 600;
+    }
+    .price-input-field {
+      width: 110px;
+      padding: 0.4rem 0.5rem;
+      border: 1.5px solid #D1D5DB;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .status-select-field {
+      padding: 0.4rem 0.5rem;
+      border: 1.5px solid #D1D5DB;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .badge-out {
+      background: #FEE2E2;
+      color: #991B1B;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .badge-in {
+      background: #D1FAE5;
+      color: #065F46;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+    .badge-low {
+      background: #FEF3C7;
+      color: #92400E;
+      padding: 0.2rem 0.5rem;
+      border-radius: 9999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+  </style>
+
+  <!-- Modular Firebase 10 SDK & Services -->
+  <script type="module">
+    import { 
+      auth, 
+      signOut, 
+      onAuthStateChanged,
+      subscribeToProducts,
+      adminUpdateProduct,
+      adminUpdateOrderStatus,
+      db,
+      collection,
+      getDocs,
+      query,
+      orderBy
+    } from "./firebase-service.js";
+
+    // Track admin auth state
+    let currentAdminUser = null;
+    onAuthStateChanged(auth, (user) => {
+      currentAdminUser = user;
+      const userDisplay = document.getElementById('admin-user-display');
+      if (user) {
+        if (userDisplay) userDisplay.textContent = `Logged in: ${user.email}`;
+      } else {
+        if (userDisplay) userDisplay.innerHTML = `<span style="color:#DC2626;">Guest / Unauthenticated View</span> <a href="admin-login.html" style="text-decoration:underline; font-weight:600; color:#2563EB;">(Click to Sign In)</a>`;
+      }
+    });
+
+    window.handleAdminSignOut = async () => {
+      await signOut(auth);
+      window.location.href = "admin-login.html";
+    };
+
+    // Live Inventory Table Logic
+    let allProducts = [];
+    window.loadProductsLive = () => {
+      subscribeToProducts((products) => {
+        allProducts = products;
+        renderProductsTable(products);
+      });
+    };
+
+    function renderProductsTable(products) {
+      const tbody = document.getElementById('inventory-table-body');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+
+      products.forEach(p => {
+        const stock = typeof p.stock === 'number' ? p.stock : 0;
+        let badge = '<span class="badge-in">Available</span>';
+        if (p.status === 'out_of_stock' || stock <= 0) {
+          badge = '<span class="badge-out">Out of Stock</span>';
+        } else if (stock <= 2) {
+          badge = '<span class="badge-low">Low Stock</span>';
+        }
+
+        const tr = document.createElement('tr');
+        tr.id = `product-row-${p.productId}`;
+        tr.innerHTML = `
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <img src="${p.image || ''}" alt="${p.productName}" style="width: 44px; height: 44px; object-fit: cover; border-radius: 6px; border: 1px solid #E5E7EB;">
+              <div>
+                <a href="${p.productUrl || 'index.html'}" target="_blank" style="font-weight: 700; color: var(--primary); text-decoration: none;">
+                  ${p.productName}
+                </a>
+                <div style="font-size: 0.75rem; color: #6B7280; font-family: monospace;">ID: ${p.productId}</div>
+              </div>
+            </div>
+          </td>
+          <td>${p.category || 'Fashion'}</td>
+          <td>
+            <div style="display: flex; align-items: center; gap: 0.25rem;">
+              <span style="font-size: 0.85rem; color: #6B7280;">Rs.</span>
+              <input type="number" id="price-input-${p.productId}" class="price-input-field" value="${p.price}" min="0">
+            </div>
+          </td>
+          <td>
+            <input type="number" id="stock-input-${p.productId}" class="stock-input-field" value="${stock}" min="0">
+          </td>
+          <td>${badge}</td>
+          <td>
+            <button type="button" class="btn btn-outline" style="padding: 0.35rem 0.85rem; font-size: 0.8rem; border-color: #2563EB; color: #2563EB;" onclick="saveProductChanges('${p.productId}')">
+              Save
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    window.saveProductChanges = async (productId) => {
+      const stockInput = document.getElementById(`stock-input-${productId}`);
+      const priceInput = document.getElementById(`price-input-${productId}`);
+      if (!stockInput || !priceInput) return;
+
+      const newStock = parseInt(stockInput.value, 10);
+      const newPrice = parseFloat(priceInput.value);
+
+      if (isNaN(newStock) || newStock < 0) {
+        alert('Please enter a valid non-negative integer for stock quantity.');
+        return;
+      }
+      if (isNaN(newPrice) || newPrice < 0) {
+        alert('Please enter a valid price in PKR.');
+        return;
+      }
+
+      const saveBtn = document.querySelector(`#product-row-${productId} button`);
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+      }
+
+      try {
+        await adminUpdateProduct(productId, {
+          stock: newStock,
+          price: newPrice
+        });
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = '✓ Saved';
+          setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500);
+        }
+      } catch (err) {
+        console.error('Failed to update product in Firestore:', err);
+        alert('Error saving changes: ' + (err.message || 'Permission denied'));
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+        }
+      }
+    };
+
+    // Live Orders Management Logic
+    window.loadOrdersLive = async () => {
+      const ordersContainer = document.getElementById('orders-list-container');
+      if (!ordersContainer) return;
+      ordersContainer.innerHTML = '<p style="color:#6B7280;">Loading orders from Firestore...</p>';
+
+      try {
+        const ordersCol = collection(db, 'orders');
+        const snap = await getDocs(ordersCol);
+        if (snap.empty) {
+          ordersContainer.innerHTML = '<p style="color:#6B7280;">No customer orders placed yet.</p>';
+          return;
+        }
+
+        const orders = [];
+        snap.forEach(docSnap => orders.push({ id: docSnap.id, ...docSnap.data() }));
+        orders.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+        let html = '';
+        orders.forEach(ord => {
+          const status = (ord.status || 'Pending').toLowerCase();
+          const itemsCount = (ord.items || []).reduce((acc, it) => acc + (it.quantity || 1), 0);
+          
+          html += `
+            <div class="admin-card" style="margin-bottom: 1.25rem;">
+              <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem;">
+                <div>
+                  <span class="order-tracking-badge ${status}">${ord.status}</span>
+                  <strong style="margin-left: 0.5rem; font-family: monospace; font-size: 1.05rem;">${ord.orderId}</strong>
+                  <span style="font-size: 0.8rem; color: #6B7280; margin-left: 0.75rem;">${new Date(ord.createdAt).toLocaleString()}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <label style="font-size: 0.82rem; font-weight: 600;">Status:</label>
+                  <select class="status-select-field" onchange="updateOrderStatus('${ord.orderId}', this.value)">
+                    <option value="Pending" ${ord.status === 'Pending' ? 'selected' : ''}>Pending</option>
+                    <option value="Confirmed" ${ord.status === 'Confirmed' ? 'selected' : ''}>Confirmed</option>
+                    <option value="Preparing" ${ord.status === 'Preparing' ? 'selected' : ''}>Preparing</option>
+                    <option value="Shipped" ${ord.status === 'Shipped' ? 'selected' : ''}>Shipped</option>
+                    <option value="Delivered" ${ord.status === 'Delivered' ? 'selected' : ''}>Delivered</option>
+                    <option value="Cancelled" ${ord.status === 'Cancelled' ? 'selected' : ''}>Cancelled</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style="font-size: 0.88rem; color: #374151; margin-bottom: 0.75rem; line-height: 1.5; background: #F9FAFB; padding: 0.75rem; border-radius: 8px;">
+                <div><strong>Customer:</strong> ${ord.customerName || 'N/A'} • <strong>Phone:</strong> <a href="https://wa.me/${(ord.phone || '').replace(/[^0-9]/g, '')}" target="_blank" style="color: #059669; text-decoration: underline;">${ord.phone || 'N/A'}</a></div>
+                <div><strong>Address:</strong> ${ord.address || ''}, ${ord.area || ''}, ${ord.city || ''}, ${ord.province || ''}</div>
+              </div>
+
+              <div style="font-size: 0.85rem; margin-bottom: 0.5rem;">
+                <strong>Items (${itemsCount}):</strong>
+                <ul style="margin: 0.35rem 0 0 1.25rem; padding: 0;">
+                  ${(ord.items || []).map(it => `<li>${it.quantity}x ${it.productName || it.name} @ Rs. ${Number(it.price).toLocaleString()}</li>`).join('')}
+                </ul>
+              </div>
+
+              <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.95rem; font-weight: 700; border-top: 1px dashed #E5E7EB; padding-top: 0.5rem;">
+                <span>Total (COD): Rs. ${Number(ord.total || 0).toLocaleString()}</span>
+                <a href="https://api.whatsapp.com/send?phone=03232974451&text=${encodeURIComponent('Regarding Order ' + ord.orderId + ' for customer ' + ord.customerName)}" target="_blank" class="btn btn-outline" style="font-size: 0.78rem; padding: 0.3rem 0.75rem;">
+                  WhatsApp Log
+                </a>
+              </div>
+            </div>
+          `;
+        });
+        ordersContainer.innerHTML = html;
+      } catch (err) {
+        console.error('Error loading orders:', err);
+        ordersContainer.innerHTML = `<p style="color:#DC2626;">Failed to load orders: ${err.message}</p>`;
+      }
+    };
+
+    window.updateOrderStatus = async (orderId, newStatus) => {
+      try {
+        await adminUpdateOrderStatus(orderId, newStatus);
+        alert(`Order #${orderId} status updated to ${newStatus}.`);
+      } catch (err) {
+        alert('Failed to update status: ' + err.message);
+      }
+    };
+
+    // Auto initialize on DOM ready
+    window.addEventListener('DOMContentLoaded', () => {
+      window.loadProductsLive();
+    });
+  </script>
+</head>
+<body style="background: #F8F9FA;">
+
+  <!-- Site Header -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="index.html" class="logo">
+        <span class="logo-main">ZENVORA</span>
+        <span class="logo-sub">ADMIN CONTROL</span>
+      </a>
+      <div style="display: flex; align-items: center; gap: 1rem;">
+        <span id="admin-user-display" style="font-size: 0.82rem; color: #4B5563;"></span>
+        <a href="index.html" class="btn btn-outline" style="font-size: 0.8rem; padding: 0.4rem 0.9rem;">
+          View Store
+        </a>
+        <button type="button" class="btn btn-dark" style="font-size: 0.8rem; padding: 0.4rem 0.9rem;" onclick="handleAdminSignOut()">
+          Sign Out
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-dashboard-layout">
+    
+    <div class="admin-header-row">
+      <div>
+        <h1 style="font-family: var(--font-serif); font-size: 2rem; color: var(--primary); margin-bottom: 0.25rem;">
+          Inventory & Order Control Center
+        </h1>
+        <p style="font-size: 0.88rem; color: #6B7280; margin: 0;">
+          Authoritative real-time Firestore database connection for ZENVORA SHOOP.
+        </p>
+      </div>
+    </div>
+
+    <!-- Admin Navigation Tabs -->
+    <div class="admin-tabs">
+      <button type="button" class="admin-tab-btn active" id="tab-btn-stock" onclick="switchAdminTab('stock')">
+        📦 Stock & Pricing Manager
+      </button>
+      <button type="button" class="admin-tab-btn" id="tab-btn-orders" onclick="switchAdminTab('orders')">
+        📋 Customer Orders
+      </button>
+    </div>
+
+    <!-- TAB 1: Stock & Inventory Management -->
+    <div id="admin-view-stock" class="admin-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 700; color: var(--primary);">Real-Time Product Catalogue</h2>
+        <div style="font-size: 0.82rem; color: #6B7280;">
+          💡 Changes take effect immediately on product pages and storefront cards.
+        </div>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <table class="stock-table">
+          <thead>
+            <tr>
+              <th>Product Details</th>
+              <th>Category</th>
+              <th>Price (PKR)</th>
+              <th>Stock Quantity</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="inventory-table-body">
+            <!-- Rendered by live Firestore subscriber -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- TAB 2: Customer Orders Management -->
+    <div id="admin-view-orders" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 700; color: var(--primary);">Customer Orders in Firestore</h2>
+        <button type="button" class="btn btn-outline" style="font-size: 0.82rem; padding: 0.4rem 0.85rem;" onclick="loadOrdersLive()">
+          🔄 Refresh Orders
+        </button>
+      </div>
+      <div id="orders-list-container">
+        <!-- Rendered by loadOrdersLive -->
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    function switchAdminTab(tab) {
+      const stockView = document.getElementById('admin-view-stock');
+      const ordersView = document.getElementById('admin-view-orders');
+      const stockBtn = document.getElementById('tab-btn-stock');
+      const ordersBtn = document.getElementById('tab-btn-orders');
+
+      if (tab === 'stock') {
+        stockView.style.display = 'block';
+        ordersView.style.display = 'none';
+        stockBtn.classList.add('active');
+        ordersBtn.classList.remove('active');
+      } else {
+        stockView.style.display = 'none';
+        ordersView.style.display = 'block';
+        stockBtn.classList.remove('active');
+        ordersBtn.classList.add('active');
+        if (typeof window.loadOrdersLive === 'function') {
+          window.loadOrdersLive();
+        }
+      }
+    }
+  </script>
+
+</body>
+</html>

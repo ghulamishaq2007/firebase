@@ -1,0 +1,375 @@
+import { 
+  initializeApp, 
+  getApps, 
+  getApp,
+  getFirestore, 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  collection, 
+  getDocs, 
+  onSnapshot, 
+  runTransaction, 
+  serverTimestamp, 
+  query, 
+  orderBy,
+  getAuth, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged 
+} from "./firebase-bundle.js";
+
+import { firebaseConfig, INITIAL_PRODUCTS, canonicalizeProductId } from "./firebase-config.js";
+
+// Initialize Firebase App
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+
+// Initialize Firestore with specific database ID if configured
+const db = firebaseConfig.firestoreDatabaseId 
+  ? getFirestore(app, firebaseConfig.firestoreDatabaseId) 
+  : getFirestore(app);
+
+const auth = getAuth(app);
+
+/**
+ * Seed initial products into Firestore if the products collection is empty.
+ * Runs idempotently in background.
+ */
+export async function seedProductsIfEmpty() {
+  try {
+    const productsCol = collection(db, "products");
+    const snapshot = await getDocs(productsCol);
+    if (snapshot.empty) {
+      console.log("[ZENVORA] Seeding initial catalogue into Firestore...");
+      const batchPromises = INITIAL_PRODUCTS.map(p => {
+        const docRef = doc(db, "products", p.productId);
+        return setDoc(docRef, {
+          ...p,
+          updatedAt: new Date().toISOString()
+        });
+      });
+      await Promise.all(batchPromises);
+      console.log("[ZENVORA] Catalogue successfully seeded in Firestore.");
+    }
+  } catch (err) {
+    console.warn("[ZENVORA] Product seeding check warning:", err.message);
+  }
+}
+
+/**
+ * Get a single product document from Firestore.
+ */
+export async function getProduct(productId) {
+  const canonicalId = canonicalizeProductId(productId);
+  try {
+    const docRef = doc(db, "products", canonicalId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return { productId: canonicalId, ...snap.data() };
+    }
+    // Fallback to static catalogue definition if document not yet created
+    const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
+    if (fallback) return { ...fallback };
+    return null;
+  } catch (err) {
+    console.error(`[ZENVORA] Error fetching product ${productId}:`, err);
+    const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
+    return fallback ? { ...fallback } : null;
+  }
+}
+
+/**
+ * Listen to real-time updates for all products.
+ */
+export function subscribeToProducts(callback) {
+  const productsCol = collection(db, "products");
+  return onSnapshot(productsCol, (snapshot) => {
+    const products = [];
+    snapshot.forEach(docSnap => {
+      products.push({ productId: docSnap.id, ...docSnap.data() });
+    });
+    callback(products);
+  }, (err) => {
+    console.warn("[ZENVORA] Firestore products subscription error:", err.message);
+  });
+}
+
+/**
+ * Listen to real-time updates for a single product.
+ */
+export function subscribeToProduct(productId, callback) {
+  const canonicalId = canonicalizeProductId(productId);
+  const docRef = doc(db, "products", canonicalId);
+  return onSnapshot(docRef, (snap) => {
+    if (snap.exists()) {
+      callback({ productId: snap.id, ...snap.data() });
+    } else {
+      const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
+      if (fallback) callback({ ...fallback });
+    }
+  }, (err) => {
+    console.warn(`[ZENVORA] Product listener error for ${productId}:`, err.message);
+  });
+}
+
+/**
+ * Atomic stock deduction and order creation transaction.
+ * 
+ * Verifies that all cart items exist, have adequate stock, validates authoritative
+ * server prices, deducts stock, and creates the order document in Firestore.
+ * 
+ * @param {Object} orderData - Customer information & cart items
+ * @returns {Promise<{success: boolean, orderId?: string, error?: string}>}
+ */
+export async function createOrderWithStockDeduction(orderData) {
+  const { customerName, phone, province, city, area, address, items } = orderData;
+
+  if (!items || items.length === 0) {
+    return { success: false, error: "Your shopping bag is empty." };
+  }
+
+  // Generate unique order ID: ZV-YYYYMMDD-XXXX
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, "");
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+  const orderId = `ZV-${dateStr}-${randomSuffix}`;
+  const orderDocRef = doc(db, "orders", orderId);
+
+  // 30 minute cancellation window
+  const createdAtIso = now.toISOString();
+  const cancellationDeadline = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      // 1. Read all product documents involved in the order
+      const productDocs = [];
+      for (const item of items) {
+        const canonicalId = canonicalizeProductId(item.id);
+        const pRef = doc(db, "products", canonicalId);
+        const pSnap = await transaction.get(pRef);
+
+        let pData;
+        if (!pSnap.exists()) {
+          // If product doesn't exist yet in Firestore, initialize from seed definition
+          const seed = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
+          if (!seed) {
+            throw new Error(`Product "${item.name}" is no longer available in the catalogue.`);
+          }
+          pData = { ...seed };
+          transaction.set(pRef, { ...seed, updatedAt: createdAtIso });
+        } else {
+          pData = pSnap.data();
+        }
+
+        const requestedQty = Number(item.quantity) || 1;
+        const currentStock = typeof pData.stock === 'number' ? pData.stock : 0;
+
+        if (currentStock < requestedQty) {
+          if (currentStock <= 0) {
+            throw new Error(`Sorry, "${pData.productName || item.name}" is currently Out of Stock.`);
+          } else {
+            throw new Error(`Sorry, only ${currentStock} item(s) available for "${pData.productName || item.name}".`);
+          }
+        }
+
+        productDocs.push({
+          ref: pRef,
+          currentStock,
+          requestedQty,
+          authoritativePrice: pData.price || item.price,
+          productName: pData.productName || item.name,
+          productId: canonicalId,
+          image: pData.image || item.image || "",
+          size: item.size || "Standard",
+          color: item.color || "Standard"
+        });
+      }
+
+      // 2. Perform stock deductions
+      let verifiedTotal = 0;
+      const verifiedItems = [];
+
+      for (const p of productDocs) {
+        const newStock = p.currentStock - p.requestedQty;
+        const newStatus = newStock <= 0 ? "out_of_stock" : "available";
+
+        transaction.update(p.ref, {
+          stock: newStock,
+          status: newStatus,
+          updatedAt: createdAtIso
+        });
+
+        const subtotal = p.authoritativePrice * p.requestedQty;
+        verifiedTotal += subtotal;
+
+        verifiedItems.push({
+          productId: p.productId,
+          productName: p.productName,
+          price: p.authoritativePrice,
+          quantity: p.requestedQty,
+          subtotal,
+          image: p.image,
+          size: p.size,
+          color: p.color
+        });
+      }
+
+      // 3. Write order document
+      const orderRecord = {
+        orderId,
+        customerName: customerName.trim(),
+        phone: phone.trim(),
+        province: province.trim(),
+        city: city.trim(),
+        area: area.trim(),
+        address: address.trim(),
+        items: verifiedItems,
+        total: verifiedTotal,
+        status: "Pending",
+        createdAt: createdAtIso,
+        cancellationDeadline,
+        stockRestored: false,
+        updatedAt: createdAtIso
+      };
+
+      transaction.set(orderDocRef, orderRecord);
+
+      return { orderId, total: verifiedTotal, items: verifiedItems };
+    });
+
+    return { success: true, ...result };
+  } catch (err) {
+    console.error("[ZENVORA] Order creation transaction failed:", err);
+    return { success: false, error: err.message || "Failed to process order." };
+  }
+}
+
+/**
+ * Cancel an order within the 30-minute grace period and atomically restore stock.
+ */
+export async function cancelOrder(orderId) {
+  const trimmedId = String(orderId || "").trim();
+  if (!trimmedId) return { success: false, error: "Invalid Order ID." };
+
+  const orderDocRef = doc(db, "orders", trimmedId);
+
+  try {
+    const result = await runTransaction(db, async (transaction) => {
+      const orderSnap = await transaction.get(orderDocRef);
+      if (!orderSnap.exists()) {
+        throw new Error("Order not found. Please verify your Order ID.");
+      }
+
+      const order = orderSnap.data();
+
+      if (order.status === "Cancelled") {
+        throw new Error("This order has already been cancelled.");
+      }
+
+      if (["Shipped", "Delivered"].includes(order.status)) {
+        throw new Error(`Order cannot be cancelled because it is already ${order.status.toLowerCase()}.`);
+      }
+
+      // Verify 30-minute window
+      const now = new Date().getTime();
+      const deadline = new Date(order.cancellationDeadline).getTime();
+      if (now > deadline) {
+        throw new Error("The 30-minute cancellation window for this order has expired. Please contact support via WhatsApp (03232974451).");
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // Restore stock for all order items if not already restored
+      if (!order.stockRestored && Array.isArray(order.items)) {
+        for (const item of order.items) {
+          const canonicalId = canonicalizeProductId(item.productId);
+          const pRef = doc(db, "products", canonicalId);
+          const pSnap = await transaction.get(pRef);
+
+          if (pSnap.exists()) {
+            const currentStock = pSnap.data().stock || 0;
+            const restoredStock = currentStock + (Number(item.quantity) || 1);
+            transaction.update(pRef, {
+              stock: restoredStock,
+              status: "available",
+              updatedAt: nowIso
+            });
+          }
+        }
+      }
+
+      // Mark order as Cancelled
+      transaction.update(orderDocRef, {
+        status: "Cancelled",
+        cancelledAt: nowIso,
+        stockRestored: true,
+        updatedAt: nowIso
+      });
+
+      return { orderId: trimmedId };
+    });
+
+    return { success: true, ...result };
+  } catch (err) {
+    console.error(`[ZENVORA] Failed to cancel order ${trimmedId}:`, err);
+    return { success: false, error: err.message || "Failed to cancel order." };
+  }
+}
+
+/**
+ * Get an order by its orderId.
+ */
+export async function getOrder(orderId) {
+  const trimmedId = String(orderId || "").trim();
+  if (!trimmedId) return null;
+  try {
+    const docRef = doc(db, "orders", trimmedId);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      return { orderId: snap.id, ...snap.data() };
+    }
+    return null;
+  } catch (err) {
+    console.error(`[ZENVORA] Error fetching order ${orderId}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Update product stock and price directly (Admin only).
+ */
+export async function adminUpdateProduct(productId, updates) {
+  const canonicalId = canonicalizeProductId(productId);
+  const docRef = doc(db, "products", canonicalId);
+  const nowIso = new Date().toISOString();
+  
+  const payload = {
+    ...updates,
+    updatedAt: nowIso
+  };
+  if (typeof updates.stock === "number") {
+    payload.status = updates.stock <= 0 ? "out_of_stock" : "available";
+  }
+
+  await updateDoc(docRef, payload);
+  return { success: true };
+}
+
+/**
+ * Update order status (Admin only).
+ */
+export async function adminUpdateOrderStatus(orderId, newStatus) {
+  const docRef = doc(db, "orders", orderId);
+  const nowIso = new Date().toISOString();
+  await updateDoc(docRef, {
+    status: newStatus,
+    updatedAt: nowIso
+  });
+  return { success: true };
+}
+
+// Automatically seed on initial load
+seedProductsIfEmpty();
+
+export { db, auth, doc, getDoc, setDoc, updateDoc, collection, getDocs, onSnapshot, query, orderBy, signInWithEmailAndPassword, signOut, onAuthStateChanged };
