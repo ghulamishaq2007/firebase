@@ -553,12 +553,15 @@ function initProductDetailPage(config) {
     stockBadge = document.createElement('div');
     stockBadge.id = 'product-stock-badge';
     stockBadge.className = 'stock-status-badge in-stock';
-    stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">In Stock (Checking live...)</span>';
+    stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Checking stock...</span>';
     if (priceEl && priceEl.closest('.price-box')) {
       priceEl.closest('.price-box').appendChild(stockBadge);
     } else if (titleEl && titleEl.parentNode) {
       titleEl.parentNode.insertBefore(stockBadge, titleEl.nextSibling);
     }
+  } else {
+    stockBadge.className = 'stock-status-badge in-stock';
+    stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Checking stock...</span>';
   }
 
   function updateStockUI(stock, status) {
@@ -569,12 +572,15 @@ function initProductDetailPage(config) {
       if (isOutOfStock) {
         stockBadge.className = 'stock-status-badge out-of-stock';
         stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Out of Stock</span>';
-      } else if (availableStock <= 2) {
-        stockBadge.className = 'stock-status-badge low-stock';
-        stockBadge.innerHTML = `<span class="stock-dot"></span><span class="stock-text">Only ${availableStock} Left in Stock</span>`;
+      } else if (availableStock === 1) {
+        stockBadge.className = 'stock-status-badge in-stock';
+        stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Only 1 left</span>';
+      } else if (availableStock === 2) {
+        stockBadge.className = 'stock-status-badge in-stock';
+        stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Only 2 left</span>';
       } else {
         stockBadge.className = 'stock-status-badge in-stock';
-        stockBadge.innerHTML = `<span class="stock-dot"></span><span class="stock-text">In Stock (${availableStock} units available)</span>`;
+        stockBadge.innerHTML = `<span class="stock-dot"></span><span class="stock-text">${availableStock} in stock</span>`;
       }
     }
 
@@ -583,7 +589,7 @@ function initProductDetailPage(config) {
       if (isOutOfStock) {
         addToCartBtn.disabled = true;
         addToCartBtn.classList.add('btn-disabled');
-        addToCartBtn.textContent = 'Sold Out';
+        addToCartBtn.textContent = 'Out of Stock';
       } else {
         addToCartBtn.disabled = false;
         addToCartBtn.classList.remove('btn-disabled');
@@ -612,26 +618,82 @@ function initProductDetailPage(config) {
     }
   }
 
+  function renderStockError(message) {
+    if (stockBadge) {
+      stockBadge.className = 'stock-status-badge unavailable';
+      stockBadge.innerHTML = `<span class="stock-dot"></span><span class="stock-text">${message}</span>`;
+    }
+  }
+
   // Subscribe to real-time stock updates from Firestore
   const canonicalId = (window.zenvoraFirebase && window.zenvoraFirebase.canonicalizeProductId) 
     ? window.zenvoraFirebase.canonicalizeProductId(id) 
     : id;
 
+  let subscriptionStarted = false;
+  let unsubscribeProduct = null;
+  const subscriptionStartTimestamp = Date.now();
+
   const trySubscribeStock = () => {
+    if (subscriptionStarted) return;
+
     if (window.zenvoraFirebase && typeof window.zenvoraFirebase.subscribeToProduct === 'function') {
-      window.zenvoraFirebase.subscribeToProduct(canonicalId, (productData) => {
-        if (productData) {
-          updateStockUI(productData.stock, productData.status);
-          if (productData.price && priceEl) {
-            priceEl.textContent = 'Rs. ' + Number(productData.price).toLocaleString('en-PK');
+      subscriptionStarted = true;
+      try {
+        unsubscribeProduct = window.zenvoraFirebase.subscribeToProduct(
+          canonicalId,
+          (productData) => {
+            if (!productData || productData.exists === false) {
+              if (productData && productData.error === 'permission_denied') {
+                console.error(`[ZENVORA] Firestore permission denied for Product ID: "${canonicalId}"`, productData.rawError);
+                renderStockError('Stock temporarily unavailable');
+              } else {
+                console.error(`[ZENVORA] Product document not found in Firestore for Product ID: "${canonicalId}"`);
+                renderStockError('Stock information unavailable');
+              }
+              return;
+            }
+
+            // Real Firebase stock quantity
+            const liveStock = typeof productData.stock === 'number' ? productData.stock : 0;
+            updateStockUI(liveStock, productData.status);
+
+            if (productData.price && priceEl) {
+              priceEl.textContent = 'Rs. ' + Number(productData.price).toLocaleString('en-PK');
+            }
+          },
+          (err) => {
+            if (err && (err.code === 'cancelled' || err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
+              return;
+            }
+            console.error(`[ZENVORA] Firestore error for Product ID: "${canonicalId}":`, err);
+            renderStockError('Stock temporarily unavailable');
           }
+        );
+      } catch (err) {
+        if (!String(err || '').toLowerCase().includes('abort')) {
+          console.warn('[ZENVORA] Subscription setup warning:', err);
         }
-      });
+      }
+    } else if (Date.now() - subscriptionStartTimestamp > 7000) {
+      console.error(`[ZENVORA] Firebase bridge initialization timeout for Product ID: "${canonicalId}"`);
+      renderStockError('Stock temporarily unavailable');
     } else {
-      setTimeout(trySubscribeStock, 200);
+      setTimeout(trySubscribeStock, 50);
     }
   };
   trySubscribeStock();
+
+  const cleanupSubscription = () => {
+    if (typeof unsubscribeProduct === 'function') {
+      try {
+        unsubscribeProduct();
+      } catch (e) {}
+      unsubscribeProduct = null;
+    }
+  };
+  window.addEventListener('pagehide', cleanupSubscription);
+  window.addEventListener('beforeunload', cleanupSubscription);
 
   const descEl = document.getElementById('product-description');
   if (descEl) descEl.textContent = description;

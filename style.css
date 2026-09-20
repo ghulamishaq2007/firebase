@@ -4627,6 +4627,12 @@ body.menu-open::before {
   border: 1px solid #FECACA;
 }
 
+.stock-status-badge.unavailable {
+  background: #F3F4F6;
+  color: #4B5563;
+  border: 1px solid #E5E7EB;
+}
+
 .stock-status-badge .stock-dot {
   width: 7px;
   height: 7px;

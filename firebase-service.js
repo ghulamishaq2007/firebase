@@ -33,16 +33,19 @@ const db = firebaseConfig.firestoreDatabaseId
 const auth = getAuth(app);
 
 /**
- * Seed initial products into Firestore if the products collection is empty.
+ * Seed initial products into Firestore if missing from the products collection.
  * Runs idempotently in background.
  */
 export async function seedProductsIfEmpty() {
   try {
     const productsCol = collection(db, "products");
     const snapshot = await getDocs(productsCol);
-    if (snapshot.empty) {
-      console.log("[ZENVORA] Seeding initial catalogue into Firestore...");
-      const batchPromises = INITIAL_PRODUCTS.map(p => {
+    const existingIds = new Set(snapshot.docs.map(d => d.id));
+    const missing = INITIAL_PRODUCTS.filter(p => !existingIds.has(p.productId));
+    
+    if (missing.length > 0) {
+      console.log(`[ZENVORA] Seeding ${missing.length} missing products into Firestore...`);
+      const batchPromises = missing.map(p => {
         const docRef = doc(db, "products", p.productId);
         return setDoc(docRef, {
           ...p,
@@ -50,7 +53,7 @@ export async function seedProductsIfEmpty() {
         });
       });
       await Promise.all(batchPromises);
-      console.log("[ZENVORA] Catalogue successfully seeded in Firestore.");
+      console.log("[ZENVORA] Missing products successfully seeded in Firestore.");
     }
   } catch (err) {
     console.warn("[ZENVORA] Product seeding check warning:", err.message);
@@ -66,50 +69,67 @@ export async function getProduct(productId) {
     const docRef = doc(db, "products", canonicalId);
     const snap = await getDoc(docRef);
     if (snap.exists()) {
-      return { productId: canonicalId, ...snap.data() };
+      return { productId: canonicalId, exists: true, ...snap.data() };
     }
-    // Fallback to static catalogue definition if document not yet created
-    const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
-    if (fallback) return { ...fallback };
-    return null;
+    console.error(`[ZENVORA] Product document not found in Firestore for Product ID: "${canonicalId}"`);
+    return { productId: canonicalId, exists: false, error: 'not_found' };
   } catch (err) {
     console.error(`[ZENVORA] Error fetching product ${productId}:`, err);
-    const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
-    return fallback ? { ...fallback } : null;
+    return { productId: canonicalId, exists: false, error: 'error', rawError: err };
   }
 }
 
 /**
  * Listen to real-time updates for all products.
  */
-export function subscribeToProducts(callback) {
+export function subscribeToProducts(callback, errorCallback) {
   const productsCol = collection(db, "products");
   return onSnapshot(productsCol, (snapshot) => {
     const products = [];
     snapshot.forEach(docSnap => {
-      products.push({ productId: docSnap.id, ...docSnap.data() });
+      products.push({ productId: docSnap.id, exists: true, ...docSnap.data() });
     });
     callback(products);
   }, (err) => {
-    console.warn("[ZENVORA] Firestore products subscription error:", err.message);
+    if (err && (err.code === 'cancelled' || err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
+      return;
+    }
+    console.error("[ZENVORA] Firestore products subscription error:", err);
+    if (typeof errorCallback === 'function') errorCallback(err);
   });
 }
 
 /**
- * Listen to real-time updates for a single product.
+ * Listen to real-time updates for a single product with comprehensive error handling.
  */
-export function subscribeToProduct(productId, callback) {
+export function subscribeToProduct(productId, callback, errorCallback) {
   const canonicalId = canonicalizeProductId(productId);
   const docRef = doc(db, "products", canonicalId);
   return onSnapshot(docRef, (snap) => {
     if (snap.exists()) {
-      callback({ productId: snap.id, ...snap.data() });
+      callback({ productId: snap.id, exists: true, ...snap.data() });
     } else {
-      const fallback = INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
-      if (fallback) callback({ ...fallback });
+      console.error(`[ZENVORA] Stock document not found in Firestore for Product ID: "${canonicalId}"`);
+      if (typeof callback === 'function') {
+        callback({ productId: canonicalId, exists: false, error: 'not_found' });
+      }
     }
   }, (err) => {
-    console.warn(`[ZENVORA] Product listener error for ${productId}:`, err.message);
+    if (err && (err.code === 'cancelled' || err.name === 'AbortError' || String(err.message || '').toLowerCase().includes('abort'))) {
+      return;
+    }
+    console.error(`[ZENVORA] Firestore error for Product ID: "${canonicalId}":`, err);
+    const isPermission = err && (err.code === 'permission-denied' || String(err.message || '').includes('permission'));
+    if (typeof errorCallback === 'function') {
+      errorCallback(err);
+    } else if (typeof callback === 'function') {
+      callback({
+        productId: canonicalId,
+        exists: false,
+        error: isPermission ? 'permission_denied' : 'error',
+        rawError: err
+      });
+    }
   });
 }
 
@@ -369,7 +389,5 @@ export async function adminUpdateOrderStatus(orderId, newStatus) {
   return { success: true };
 }
 
-// Automatically seed on initial load
-seedProductsIfEmpty();
-
+// Export modules
 export { db, auth, doc, getDoc, setDoc, updateDoc, collection, getDocs, onSnapshot, query, orderBy, signInWithEmailAndPassword, signOut, onAuthStateChanged };

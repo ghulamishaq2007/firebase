@@ -13,14 +13,3 @@ self.addEventListener('activate', event => {
   );
 });
 
-// Always route directly to the network without serving stale cache
-self.addEventListener('fetch', event => {
-  if (event.request.method !== 'GET') return;
-  event.respondWith(
-    fetch(event.request).catch(err => {
-      // In sandboxed/offline preview or aborted fetches, return empty or pass through
-      return new Response('', { status: 408, statusText: 'Network request skipped' });
-    })
-  );
-});
-

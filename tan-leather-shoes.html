@@ -127,10 +127,6 @@
         line-height: 1.2 !important;
         margin: 0 auto !important;
       }
-      .nav-menu {
-        top: var(--nav-bottom, 62px) !important;
-        height: calc(100dvh - var(--nav-bottom, 62px)) !important;
-      }
     }
 
     @media (max-width: 480px) {
@@ -201,6 +197,7 @@
         <ul class="nav-menu" id="nav-menu">
           <li><a href="index.html" class="nav-link">Home</a></li>
           <li><a href="index.html#products" class="nav-link">Categories</a></li>
+          <li><a href="my-order.html" class="nav-link">Track Order</a></li>
           <li><a href="about.html" class="nav-link">About</a></li>
           <li><a href="contact.html" class="nav-link">Contact</a></li>
         </ul>
@@ -353,6 +350,7 @@
     </div>
   </footer>
 
+  <script type="module" src="firebase-bridge.js"></script>
   <script src="cart.js?v=20260826"></script>
   <script src="script.js?v=20260826"></script>
   <script>
