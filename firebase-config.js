@@ -192,7 +192,18 @@ export const INITIAL_PRODUCTS = [
     category: "Sandals",
     stock: 4,
     status: "available"
+  },
+  {
+    productId: "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women",
+    productName: "Royal Blue Chiffon Maxi Suit with Gold Embroidery for Women",
+    productUrl: "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women.html",
+    price: 3300,
+    image: "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women.jpeg",
+    category: "Ladies Suits",
+    stock: 4,
+    status: "available"
   }
+
 ];
 
 // Alias mapping for any legacy quick-add IDs in index.html
