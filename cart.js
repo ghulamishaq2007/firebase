@@ -128,10 +128,18 @@ function normalizePhoneForOrder(phone) {
   return phone.trim();
 }
 
-// Add to Cart
-function addToCart(product, quantityToAdd = 1) {
+// Add to Cart with live stock validation
+function addToCart(product, quantityToAdd = 1, maxStock = null) {
   let cart = getCart();
   const qty = Number(quantityToAdd) || 1;
+
+  // If maxStock is passed or known, enforce immediate check
+  if (typeof maxStock === 'number' && maxStock > 0 && qty > maxStock) {
+    if (typeof showToast === 'function') {
+      showToast(`Only ${maxStock} items are currently available.`, 'warning');
+    }
+    return false;
+  }
 
   // Find existing item matching id and variants (if size/color specified)
   const existingProduct = cart.find(item =>
@@ -141,9 +149,18 @@ function addToCart(product, quantityToAdd = 1) {
   );
 
   if (existingProduct) {
-    existingProduct.quantity = (Number(existingProduct.quantity) || 0) + qty;
+    const currentQty = Number(existingProduct.quantity) || 0;
+    const effectiveStock = typeof maxStock === 'number' ? maxStock : (existingProduct.maxStock || null);
+    if (typeof effectiveStock === 'number' && effectiveStock > 0 && (currentQty + qty) > effectiveStock) {
+      if (typeof showToast === 'function') {
+        showToast(`Only ${effectiveStock} items are currently available.`, 'warning');
+      }
+      return false;
+    }
+    existingProduct.quantity = currentQty + qty;
     if (product.price) existingProduct.price = Number(product.price);
     if (product.image) existingProduct.image = product.image;
+    if (typeof maxStock === 'number') existingProduct.maxStock = maxStock;
   } else {
     cart.push({
       id: product.id,
@@ -154,7 +171,8 @@ function addToCart(product, quantityToAdd = 1) {
       category: product.category || 'Fashion',
       size: product.size || 'Standard',
       color: product.color || 'Standard',
-      url: product.url || 'index.html'
+      url: product.url || 'index.html',
+      maxStock: (typeof maxStock === 'number' ? maxStock : null)
     });
   }
 
@@ -169,15 +187,35 @@ function addToCart(product, quantityToAdd = 1) {
   return true;
 }
 
-// Directly set quantity for cart item (supports typing any quantity)
-function setCartItemQuantity(index, newQty) {
+// Directly set quantity for cart item with stock check
+async function setCartItemQuantity(index, newQty) {
   let cart = getCart();
   if (index < 0 || index >= cart.length) return;
 
-  const parsedQty = parseInt(newQty, 10);
+  let parsedQty = parseInt(newQty, 10);
   if (isNaN(parsedQty) || parsedQty <= 0) {
     removeCartItem(index);
     return;
+  }
+
+  const item = cart[index];
+  let liveStock = item.maxStock || null;
+
+  if (window.zenvoraFirebase && typeof window.zenvoraFirebase.getProduct === 'function') {
+    try {
+      const prodDoc = await window.zenvoraFirebase.getProduct(item.id);
+      if (prodDoc && prodDoc.exists && typeof prodDoc.stock === 'number') {
+        liveStock = prodDoc.stock;
+        item.maxStock = liveStock;
+      }
+    } catch (e) {}
+  }
+
+  if (typeof liveStock === 'number' && liveStock > 0 && parsedQty > liveStock) {
+    parsedQty = liveStock;
+    if (typeof showToast === 'function') {
+      showToast(`Only ${liveStock} items are currently available for "${item.name}".`, 'warning');
+    }
   }
 
   cart[index].quantity = parsedQty;
@@ -186,8 +224,8 @@ function setCartItemQuantity(index, newQty) {
   renderCart();
 }
 
-// Modify item quantity in cart (unrestricted positive quantity)
-function updateCartItemQuantity(index, delta) {
+// Modify item quantity in cart with live stock protection
+async function updateCartItemQuantity(index, delta) {
   let cart = getCart();
   if (index < 0 || index >= cart.length) return;
 
@@ -198,6 +236,30 @@ function updateCartItemQuantity(index, delta) {
   if (newQty <= 0) {
     removeCartItem(index);
     return;
+  }
+
+  if (delta > 0) {
+    let liveStock = item.maxStock || null;
+    if (window.zenvoraFirebase && typeof window.zenvoraFirebase.getProduct === 'function') {
+      try {
+        const prodDoc = await window.zenvoraFirebase.getProduct(item.id);
+        if (prodDoc && prodDoc.exists && typeof prodDoc.stock === 'number') {
+          liveStock = prodDoc.stock;
+          item.maxStock = liveStock;
+        }
+      } catch (e) {}
+    }
+
+    if (typeof liveStock === 'number' && liveStock > 0 && newQty > liveStock) {
+      if (typeof showToast === 'function') {
+        showToast(`Only ${liveStock} items are currently available for "${item.name}".`, 'warning');
+      }
+      item.quantity = liveStock;
+      localStorage.setItem(CART_KEY, JSON.stringify(cart));
+      updateCartBadges();
+      renderCart();
+      return;
+    }
   }
 
   item.quantity = newQty;
@@ -281,9 +343,9 @@ function renderCart() {
 
         <div>
           <div class="quantity-picker" style="height: 36px;">
-            <button type="button" class="qty-btn" style="width: 32px; height: 36px; font-size: 1rem;" onclick="updateCartItemQuantity(${index}, -1)" aria-label="Decrease quantity">−</button>
-            <input type="number" min="1" class="qty-input" style="width: 48px; height: 36px; font-size: 0.9rem; text-align: center;" value="${itemQty}" onchange="setCartItemQuantity(${index}, this.value)" aria-label="Quantity">
-            <button type="button" class="qty-btn" style="width: 32px; height: 36px; font-size: 1rem;" onclick="updateCartItemQuantity(${index}, 1)" aria-label="Increase quantity">+</button>
+            <button type="button" class="qty-btn" style="width: 32px; height: 36px; font-size: 1rem;" onclick="updateCartItemQuantity(${index}, -1)" aria-label="Decrease quantity"${itemQty <= 1 ? ' disabled' : ''}>−</button>
+            <input type="number" min="1" ${typeof item.maxStock === 'number' && item.maxStock > 0 ? `max="${item.maxStock}"` : ''} class="qty-input" style="width: 48px; height: 36px; font-size: 0.9rem; text-align: center;" value="${itemQty}" onchange="setCartItemQuantity(${index}, this.value)" aria-label="Quantity">
+            <button type="button" class="qty-btn" style="width: 32px; height: 36px; font-size: 1rem;" onclick="updateCartItemQuantity(${index}, 1)" aria-label="Increase quantity"${(typeof item.maxStock === 'number' && item.maxStock > 0 && itemQty >= item.maxStock) ? ' disabled' : ''}>+</button>
           </div>
         </div>
 

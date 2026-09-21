@@ -7,7 +7,7 @@ import {
   getOrder,
   db
 } from "./firebase-service.js";
-import { canonicalizeProductId } from "./firebase-config.js";
+import { canonicalizeProductId, INITIAL_PRODUCTS } from "./firebase-config.js";
 
 // Attach core Firebase functions to window for global browser access
 if (typeof window !== 'undefined') {
@@ -19,6 +19,7 @@ if (typeof window !== 'undefined') {
     cancelOrder,
     getOrder,
     canonicalizeProductId,
+    INITIAL_PRODUCTS,
     db
   };
 

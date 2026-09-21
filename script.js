@@ -517,7 +517,7 @@ function initProductDetailPage(config) {
   let selectedColor = colors.length > 0 ? colors[0].name : 'Standard';
   let selectedColorImage = colors.length > 0 && colors[0].image ? colors[0].image : (images[0] || '');
   let selectedQty = 1;
-  let availableStock = 4; // default initial fallback
+  let availableStock = null; // Live stock from Firebase Firestore (single source of truth)
   let isOutOfStock = false;
 
   // Cache product controls before attaching handlers
@@ -526,6 +526,15 @@ function initProductDetailPage(config) {
   const qtyInput = document.getElementById('product-qty-input') || document.getElementById('quantity-input');
   const addToCartBtn = document.getElementById('btn-add-to-cart');
   const buyNowBtn = document.getElementById('btn-buy-now');
+
+  // Initial safe state for quantity controls while Firebase live stock loads
+  if (qtyInput) {
+    qtyInput.value = '1';
+    qtyInput.setAttribute('type', 'number');
+    qtyInput.setAttribute('min', '1');
+  }
+  if (qtyMinus) qtyMinus.disabled = true;
+  if (qtyPlus) qtyPlus.disabled = true;
 
   // 1. Populate UI text
   const titleEl = document.getElementById('product-title');
@@ -564,8 +573,76 @@ function initProductDetailPage(config) {
     stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Checking stock...</span>';
   }
 
+  // Synchronize Quantity Picker Controls and Action Buttons with Firebase stock
+  function syncQuantityControls() {
+    if (availableStock === null) {
+      if (qtyMinus) qtyMinus.disabled = true;
+      if (qtyPlus) qtyPlus.disabled = true;
+      return;
+    }
+
+    // CASE 1: Out of Stock (stock is 0 or status is out_of_stock)
+    if (isOutOfStock || availableStock <= 0) {
+      selectedQty = 0;
+      if (qtyInput) {
+        qtyInput.value = '0';
+        qtyInput.disabled = true;
+        qtyInput.setAttribute('min', '0');
+        qtyInput.setAttribute('max', '0');
+      }
+      if (qtyMinus) qtyMinus.disabled = true;
+      if (qtyPlus) qtyPlus.disabled = true;
+
+      if (addToCartBtn) {
+        addToCartBtn.disabled = true;
+        addToCartBtn.classList.add('btn-disabled');
+        addToCartBtn.textContent = 'Out of Stock';
+      }
+      if (buyNowBtn) {
+        buyNowBtn.disabled = true;
+        buyNowBtn.classList.add('btn-disabled');
+        buyNowBtn.textContent = 'Out of Stock';
+      }
+      return;
+    }
+
+    // CASE 2: In Stock (stock >= 1)
+    if (selectedQty < 1) selectedQty = 1;
+    if (selectedQty > availableStock) selectedQty = availableStock;
+
+    if (qtyInput) {
+      qtyInput.disabled = false;
+      qtyInput.removeAttribute('readonly');
+      qtyInput.setAttribute('type', 'number');
+      qtyInput.setAttribute('min', '1');
+      qtyInput.setAttribute('max', String(availableStock));
+      qtyInput.value = String(selectedQty);
+    }
+
+    // Minus button: disable if quantity is 1 or less
+    if (qtyMinus) {
+      qtyMinus.disabled = (selectedQty <= 1);
+    }
+
+    // Plus button: disable if quantity is equal to or greater than available Firebase stock
+    if (qtyPlus) {
+      qtyPlus.disabled = (selectedQty >= availableStock);
+    }
+
+    if (addToCartBtn) {
+      addToCartBtn.disabled = false;
+      addToCartBtn.classList.remove('btn-disabled');
+      addToCartBtn.textContent = '🛒 Add to Cart';
+    }
+    if (buyNowBtn) {
+      buyNowBtn.disabled = false;
+      buyNowBtn.classList.remove('btn-disabled');
+      buyNowBtn.textContent = '⚡ Buy Now (Instant Cart)';
+    }
+  }
+
   function updateStockUI(stock, status) {
-    availableStock = typeof stock === 'number' ? stock : 0;
+    availableStock = (typeof stock === 'number' && !isNaN(stock)) ? stock : 0;
     isOutOfStock = status === 'out_of_stock' || availableStock <= 0;
 
     if (stockBadge) {
@@ -574,48 +651,14 @@ function initProductDetailPage(config) {
         stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Out of Stock</span>';
       } else if (availableStock === 1) {
         stockBadge.className = 'stock-status-badge in-stock';
-        stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Only 1 left</span>';
-      } else if (availableStock === 2) {
-        stockBadge.className = 'stock-status-badge in-stock';
-        stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">Only 2 left</span>';
+        stockBadge.innerHTML = '<span class="stock-dot"></span><span class="stock-text">1 in stock</span>';
       } else {
         stockBadge.className = 'stock-status-badge in-stock';
         stockBadge.innerHTML = `<span class="stock-dot"></span><span class="stock-text">${availableStock} in stock</span>`;
       }
     }
 
-    // Update buttons
-    if (addToCartBtn) {
-      if (isOutOfStock) {
-        addToCartBtn.disabled = true;
-        addToCartBtn.classList.add('btn-disabled');
-        addToCartBtn.textContent = 'Out of Stock';
-      } else {
-        addToCartBtn.disabled = false;
-        addToCartBtn.classList.remove('btn-disabled');
-        addToCartBtn.textContent = '🛒 Add to Cart';
-      }
-    }
-
-    if (buyNowBtn) {
-      if (isOutOfStock) {
-        buyNowBtn.disabled = true;
-        buyNowBtn.classList.add('btn-disabled');
-        buyNowBtn.textContent = 'Out of Stock';
-      } else {
-        buyNowBtn.disabled = false;
-        buyNowBtn.classList.remove('btn-disabled');
-        buyNowBtn.textContent = '⚡ Buy Now (Instant Cart)';
-      }
-    }
-
-    if (qtyInput) {
-      qtyInput.max = availableStock > 0 ? availableStock : 1;
-      if (selectedQty > availableStock && availableStock > 0) {
-        selectedQty = availableStock;
-        qtyInput.value = selectedQty;
-      }
-    }
+    syncQuantityControls();
   }
 
   function renderStockError(message) {
@@ -629,6 +672,14 @@ function initProductDetailPage(config) {
   const canonicalId = (window.zenvoraFirebase && window.zenvoraFirebase.canonicalizeProductId) 
     ? window.zenvoraFirebase.canonicalizeProductId(id) 
     : id;
+
+  // Immediate catalog baseline if present in window.zenvoraFirebase
+  if (window.zenvoraFirebase && Array.isArray(window.zenvoraFirebase.INITIAL_PRODUCTS)) {
+    const seed = window.zenvoraFirebase.INITIAL_PRODUCTS.find(p => p.productId === canonicalId);
+    if (seed && typeof seed.stock === 'number') {
+      updateStockUI(seed.stock, seed.status);
+    }
+  }
 
   let subscriptionStarted = false;
   let unsubscribeProduct = null;
@@ -788,102 +839,178 @@ function initProductDetailPage(config) {
     });
     if (selectedColorLabel) selectedColorLabel.textContent = selectedColor;
   }
-  // 6. Quantity Handler (Supports any quantity without stock limitation or maximum restrictions)
-  if (qtyMinus && qtyPlus && qtyInput) {
-    qtyInput.removeAttribute('readonly');
-    qtyInput.setAttribute('type', 'number');
-    qtyInput.setAttribute('min', '1');
-    qtyInput.removeAttribute('max');
-
-    const syncQtyFromInput = () => {
-      let val = parseInt(qtyInput.value, 10);
-      if (!isNaN(val) && val >= 1) {
-        selectedQty = val;
-      }
-    };
+  // 6. Quantity Handler (Automatically and strictly connected to live Firebase Firestore stock)
+  if (qtyMinus && qtyPlus && qtyInput && !qtyInput.dataset.bound) {
+    qtyInput.dataset.bound = 'true';
 
     qtyMinus.addEventListener('click', () => {
+      if (availableStock === null || isOutOfStock || availableStock <= 0) return;
       let currentVal = parseInt(qtyInput.value, 10) || selectedQty || 1;
       if (currentVal > 1) {
         selectedQty = currentVal - 1;
-        qtyInput.value = selectedQty;
+        syncQuantityControls();
       }
     });
 
     qtyPlus.addEventListener('click', () => {
+      if (availableStock === null || isOutOfStock || availableStock <= 0) return;
       let currentVal = parseInt(qtyInput.value, 10) || selectedQty || 1;
-      selectedQty = currentVal + 1;
-      qtyInput.value = selectedQty;
+      if (currentVal < availableStock) {
+        selectedQty = currentVal + 1;
+        syncQuantityControls();
+      } else {
+        selectedQty = availableStock;
+        syncQuantityControls();
+        if (typeof showToast === 'function') {
+          showToast(`Only ${availableStock} items are currently available in stock.`, 'warning');
+        }
+      }
     });
+
+    const syncQtyFromInput = () => {
+      if (availableStock === null) return;
+      if (isOutOfStock || availableStock <= 0) {
+        selectedQty = 0;
+        syncQuantityControls();
+        return;
+      }
+      let val = parseInt(qtyInput.value, 10);
+      if (!isNaN(val)) {
+        if (val > availableStock) {
+          selectedQty = availableStock;
+          qtyInput.value = String(availableStock);
+          if (typeof showToast === 'function') {
+            showToast(`Only ${availableStock} items are currently available in stock.`, 'warning');
+          }
+        } else if (val < 1) {
+          selectedQty = 1;
+          qtyInput.value = '1';
+        } else {
+          selectedQty = val;
+        }
+        syncQuantityControls();
+      }
+    };
 
     qtyInput.addEventListener('input', syncQtyFromInput);
     qtyInput.addEventListener('change', () => {
       syncQtyFromInput();
       let val = parseInt(qtyInput.value, 10);
       if (isNaN(val) || val < 1) {
-        selectedQty = 1;
-        qtyInput.value = '1';
+        selectedQty = (availableStock && availableStock > 0) ? 1 : 0;
+      } else if (availableStock !== null && val > availableStock) {
+        selectedQty = availableStock;
+      } else {
+        selectedQty = val;
       }
+      syncQuantityControls();
     });
   }
 
-  // 7. Add to Cart Handler (Zero stock limitations)
+  // 7. Live Stock Validated Add to Cart & Buy Now Action Handler
+  async function handleProductAddToCartAction(isBuyNow = false) {
+    if (qtyInput) {
+      let typedVal = parseInt(qtyInput.value, 10);
+      if (!isNaN(typedVal)) selectedQty = typedVal;
+    }
+
+    // Validate against live Firebase stock at the moment of the action
+    let liveStock = availableStock;
+    if (window.zenvoraFirebase && typeof window.zenvoraFirebase.getProduct === 'function') {
+      try {
+        const freshDoc = await window.zenvoraFirebase.getProduct(canonicalId);
+        if (freshDoc && freshDoc.exists && typeof freshDoc.stock === 'number') {
+          liveStock = freshDoc.stock;
+          updateStockUI(liveStock, freshDoc.status);
+        }
+      } catch (err) {
+        console.warn('[ZENVORA] Real-time stock re-verification notice:', err);
+      }
+    }
+
+    // Check if out of stock
+    if (liveStock === null || liveStock <= 0 || isOutOfStock) {
+      if (typeof showToast === 'function') {
+        showToast('This product is currently out of stock.', 'danger');
+      }
+      return false;
+    }
+
+    // Check if requested quantity exceeds live Firebase stock
+    if (selectedQty > liveStock) {
+      if (typeof showToast === 'function') {
+        showToast(`Only ${liveStock} items are currently available.`, 'warning');
+      }
+      selectedQty = liveStock;
+      syncQuantityControls();
+      return false;
+    }
+
+    // Check total quantity against existing cart items
+    const currentCart = (typeof getCart === 'function') ? getCart() : [];
+    const existingInCart = currentCart.find(item =>
+      item.id === canonicalId &&
+      (!selectedSize || (item.size || 'Standard') === selectedSize) &&
+      (!selectedColor || (item.color || 'Standard') === selectedColor)
+    );
+    const existingCartQty = existingInCart ? (Number(existingInCart.quantity) || 0) : 0;
+
+    if (existingCartQty + selectedQty > liveStock) {
+      if (existingCartQty >= liveStock) {
+        if (typeof showToast === 'function') {
+          showToast(`You already have all ${liveStock} available item(s) in your cart.`, 'warning');
+        }
+        return false;
+      }
+      const canAdd = liveStock - existingCartQty;
+      if (typeof showToast === 'function') {
+        showToast(`Only ${liveStock} items are available in stock. You already have ${existingCartQty} in your cart (can add up to ${canAdd} more).`, 'warning');
+      }
+      selectedQty = canAdd;
+      syncQuantityControls();
+      return false;
+    }
+
+    const productPayload = {
+      id: canonicalId,
+      name,
+      price: Number(price),
+      image: selectedColorImage || (images.length > 0 ? images[0] : ''),
+      category,
+      size: selectedSize,
+      color: selectedColor,
+      url
+    };
+
+    if (typeof addToCart !== 'function') {
+      if (typeof showToast === 'function') {
+        showToast('Cart system could not load. Please refresh the page.', 'danger');
+      }
+      return false;
+    }
+
+    const success = addToCart(productPayload, selectedQty, liveStock);
+    if (!success) return false;
+
+    if (isBuyNow) {
+      window.location.href = 'cart.html';
+    }
+    return true;
+  }
+
+  // 8. Add to Cart Handler (Enforces live Firebase stock)
   if (addToCartBtn && !addToCartBtn.dataset.bound) {
     addToCartBtn.dataset.bound = 'true';
     addToCartBtn.addEventListener('click', () => {
-      // Ensure latest quantity is read from input if customer typed directly
-      if (qtyInput) {
-        let typedVal = parseInt(qtyInput.value, 10);
-        if (!isNaN(typedVal) && typedVal >= 1) selectedQty = typedVal;
-      }
-
-      const productPayload = {
-        id,
-        name,
-        price: Number(price),
-        image: selectedColorImage || (images.length > 0 ? images[0] : ''),
-        category,
-        size: selectedSize,
-        color: selectedColor,
-        url
-      };
-
-      addToCart(productPayload, selectedQty);
+      handleProductAddToCartAction(false);
     });
   }
 
-  // 8. Buy Now Handler (Zero stock limitations; saves to localStorage and redirects to cart.html)
+  // 9. Buy Now Handler (Enforces live Firebase stock & navigates to cart)
   if (buyNowBtn && !buyNowBtn.dataset.bound) {
     buyNowBtn.dataset.bound = 'true';
     buyNowBtn.addEventListener('click', () => {
-      if (typeof addToCart !== 'function') {
-        showToast('Cart system could not be loaded. Please refresh the page.', 'danger');
-        console.error('addToCart() is not available. Make sure cart.js is loaded before script.js.');
-        return;
-      }
-
-      // Ensure latest quantity is read from input if customer typed directly
-      if (qtyInput) {
-        let typedVal = parseInt(qtyInput.value, 10);
-        if (!isNaN(typedVal) && typedVal >= 1) selectedQty = typedVal;
-      }
-
-      const productPayload = {
-        id: String(id),
-        name: String(name),
-        price: Number(price),
-        image: selectedColorImage || (images.length > 0 ? images[0] : ''),
-        category: String(category || 'Fashion'),
-        size: selectedSize || 'Standard',
-        color: selectedColor || 'Standard',
-        url: url || (window.location.pathname.split('/').pop() || 'index.html')
-      };
-
-      const success = addToCart(productPayload, selectedQty);
-
-      if (success) {
-        window.location.href = 'cart.html';
-      }
+      handleProductAddToCartAction(true);
     });
   }
 
