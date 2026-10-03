@@ -31,7 +31,10 @@ const PRODUCT_URLS = {
   "orange-cross-strap-rexine-slides-for-women": "orange-cross-strap-rexine-slides-for-women.html",
   "women-white-rexine-fancy-slippers": "women-white-rexine-fancy-slippers.html",
   "gents-peshawari-chappal": "gents-peshawari-chappal.html",
-"royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women": "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women.html"
+"royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women": "royal-blue-chiffon-maxi-suit-with-gold-embroidery-for-women.html",
+   "men-double-fold-stylish-wallet": "men-double-fold-stylish-wallet.html",
+  "black-skeleton-chronograph-watch": "black-skeleton-chronograph-watch.html"
+
 
 
 };
@@ -84,13 +87,29 @@ function getCartTotal() {
   return cart.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
 }
 
-// Update all cart count badges across all pages
-function updateCartBadges() {
+// Update all cart count badges across all pages with optional subtle feedback animation
+function updateCartBadges(animate = false) {
   const count = getCartCount();
   const badges = document.querySelectorAll('.cart-badge');
   badges.forEach(badge => {
     badge.textContent = count;
+    if (animate) {
+      badge.classList.remove('cart-badge-bounce');
+      void badge.offsetWidth; // trigger reflow for animation restart
+      badge.classList.add('cart-badge-bounce');
+      setTimeout(() => badge.classList.remove('cart-badge-bounce'), 550);
+    }
   });
+
+  if (animate) {
+    const cartBtns = document.querySelectorAll('.cart-icon-btn');
+    cartBtns.forEach(btn => {
+      btn.classList.remove('cart-btn-pulse');
+      void btn.offsetWidth;
+      btn.classList.add('cart-btn-pulse');
+      setTimeout(() => btn.classList.remove('cart-btn-pulse'), 550);
+    });
+  }
 }
 
 // Format Pakistani Rupee Currency
@@ -177,7 +196,7 @@ function addToCart(product, quantityToAdd = 1, maxStock = null) {
   }
 
   localStorage.setItem(CART_KEY, JSON.stringify(cart));
-  updateCartBadges();
+  updateCartBadges(true);
 
   if (typeof showToast === 'function') {
     showToast('Product added to cart!', 'success');
@@ -268,8 +287,23 @@ async function updateCartItemQuantity(index, delta) {
   renderCart();
 }
 
-// Remove item from cart
+// Remove item from cart with smooth exit animation
 function removeCartItem(index) {
+  let cart = getCart();
+  if (index < 0 || index >= cart.length) return;
+
+  const row = document.querySelector(`.cart-row[data-index="${index}"]`);
+  if (row) {
+    row.classList.add('cart-row-removing');
+    setTimeout(() => {
+      actuallyRemoveItem(index);
+    }, 240);
+    return;
+  }
+  actuallyRemoveItem(index);
+}
+
+function actuallyRemoveItem(index) {
   let cart = getCart();
   if (index < 0 || index >= cart.length) return;
 
